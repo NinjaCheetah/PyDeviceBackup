@@ -7,25 +7,25 @@ import time
 import pathlib
 import platform
 
+import construct.core
 from pymobiledevice3 import lockdown
 from pymobiledevice3 import usbmux
 from pymobiledevice3.services import mobilebackup2
 from pymobiledevice3.exceptions import *
 
-from PySide6.QtWidgets import (QApplication, QMainWindow, QMessageBox, QTreeWidgetItem, QHeaderView, QStyle,
-                               QStyleFactory, QFileDialog)
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStyleFactory, QFileDialog
 from PySide6.QtCore import QRunnable, Slot, QThreadPool, Signal, QObject
 
 from qt.py.ui_MainMenu import Ui_MainWindow
 
 
-# Signals needed for the worker used for threading the downloads.
+# Signals needed for the worker class.
 class WorkerSignals(QObject):
     result = Signal(int)
     progress = Signal(int)
 
 
-# Worker class used to thread the downloads.
+# Worker class used to thread the backup and restore operations.
 class Worker(QRunnable):
     def __init__(self, fn, **kwargs):
         super(Worker, self).__init__()
@@ -45,7 +45,11 @@ class Worker(QRunnable):
         except ValueError:
             self.signals.result.emit(1)
         else:
-            self.signals.result.emit(result)
+            # TODO: Kinda hacky but this prevents an error being shown on shutdown when the last thread ends.
+            try:
+                self.signals.result.emit(result)
+            except:
+                pass
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -57,20 +61,27 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.lockdown_client = None
         self.active_device_udid = ""
         self.threadpool = QThreadPool()
+        self.device_listener = None
+        self.listen_for_device = True
+        self.password_set = False
         self.ui.start_backup_btn.clicked.connect(self.start_backup_btn_pressed)
         self.ui.start_restore_btn.clicked.connect(self.start_restore_btn_pressed)
+        self.ui.enable_enc_chkbox.clicked.connect(self.enable_enc_chkbox_toggled)
         self.ui.choose_backup_dir_btn.clicked.connect(self.choose_backup_dir_btn_pressed)
-        device_listener = Worker(self.watch_for_device)
-        device_listener.signals.result.connect(self.new_device_connected)
-        self.threadpool.start(device_listener)
+        self.device_listener = Worker(self.watch_for_device)
+        self.device_listener.signals.result.connect(self.new_device_connected)
+        self.threadpool.start(self.device_listener)
 
     def watch_for_device(self, progress_callback):
         device_list = None
         while device_list is None or len(device_list) == 0:
-            try:
-                device_list = usbmux.list_devices()
-            except ConnectionFailedToUsbmuxdError:
-                time.sleep(1)
+            if self.listen_for_device:
+                try:
+                    device_list = usbmux.list_devices()
+                except ConnectionFailedToUsbmuxdError:
+                    time.sleep(1)
+            else:
+                return
         print(device_list)
         self.active_device_udid = device_list[0].serial
         return 0
@@ -82,20 +93,32 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.ui.device_type_lbl.setText(self.lockdown_client.display_name)
         self.ui.ios_version_lbl.setText("iOS Version: " + self.lockdown_client.product_version)
         self.ui.device_udid_lbl.setText("UDID: " + self.lockdown_client.identifier)
+        backup_client = mobilebackup2.Mobilebackup2Service(self.lockdown_client)
+        encryption_enabled = backup_client.will_encrypt
+        self.ui.enable_enc_chkbox.setChecked(encryption_enabled)
+        self.ui.clear_enc_pass_btn.setEnabled(encryption_enabled)
+        if encryption_enabled:
+            self.ui.device_enc_enabled_lbl.setText("This device has an encryption password set.")
+        else:
+            self.ui.device_enc_enabled_lbl.setText("")
+        backup_client.close()
         print(self.lockdown_client.short_info)
         # Issue device disconnect listener.
-        disconnect_listener = Worker(self.watch_for_disconnect)
-        disconnect_listener.signals.result.connect(self.device_disconnected)
-        self.threadpool.start(disconnect_listener)
+        self.device_listener = Worker(self.watch_for_disconnect)
+        self.device_listener.signals.result.connect(self.device_disconnected)
+        self.threadpool.start(self.device_listener)
 
     def watch_for_disconnect(self, progress_callback):
         device_connected = True
         while device_connected:
-            try:
-                date = self.lockdown_client.date
-                time.sleep(1)
-            except ConnectionFailedToUsbmuxdError:
-                device_connected = False
+            if self.listen_for_device:
+                try:
+                    _ = self.lockdown_client.date
+                    time.sleep(1)
+                except ConnectionFailedToUsbmuxdError or construct.core.StreamError:
+                    device_connected = False
+            else:
+                return
         return 0
 
     def device_disconnected(self):
@@ -104,10 +127,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.ui.device_type_lbl.setText("Connect a device to begin")
         self.ui.ios_version_lbl.setText("iOS Version: ")
         self.ui.device_udid_lbl.setText("UDID: ")
+        self.ui.enable_enc_chkbox.setChecked(False)
+        self.ui.enable_enc_chkbox.setEnabled(False)
+        self.ui.device_enc_enabled_lbl.setText("")
         # Reissue device connection listener.
-        device_listener = Worker(self.watch_for_device)
-        device_listener.signals.result.connect(self.new_device_connected)
-        self.threadpool.start(device_listener)
+        self.device_listener = Worker(self.watch_for_device)
+        self.device_listener.signals.result.connect(self.new_device_connected)
+        self.threadpool.start(self.device_listener)
 
     def start_backup_btn_pressed(self):
         msg_box = QMessageBox()
@@ -206,6 +232,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             backup_dir_path = file_dialog.selectedFiles()[0]
             self.ui.backup_dir_entry.setText(backup_dir_path)
             print(backup_dir_path)
+
+    def enable_enc_chkbox_toggled(self):
+        if self.ui.enable_enc_chkbox.isChecked():
+            self.ui.set_enc_pass_btn.setEnabled(True)
+        else:
+            self.ui.set_enc_pass_btn.setEnabled(False)
+
+    def closeEvent(self, event):
+        try:
+            self.lockdown_client.disconnect()
+        except:
+            pass
+        self.listen_for_device = False
 
 
 if __name__ == "__main__":

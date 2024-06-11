@@ -15,9 +15,10 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMenuBar, QProgressBar, QPushButton,
-    QSizePolicy, QSpacerItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel,
+    QLineEdit, QMainWindow, QMenuBar, QProgressBar,
+    QPushButton, QSizePolicy, QSpacerItem, QVBoxLayout,
+    QWidget)
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -131,23 +132,48 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_6.addLayout(self.horizontalLayout_2)
 
+        self.enable_enc_chkbox = QCheckBox(self.centralwidget)
+        self.enable_enc_chkbox.setObjectName(u"enable_enc_chkbox")
+
+        self.verticalLayout_6.addWidget(self.enable_enc_chkbox)
+
+        self.label_5 = QLabel(self.centralwidget)
+        self.label_5.setObjectName(u"label_5")
+        self.label_5.setMaximumSize(QSize(380, 16777215))
+        self.label_5.setWordWrap(True)
+
+        self.verticalLayout_6.addWidget(self.label_5)
+
+        self.horizontalLayout_4 = QHBoxLayout()
+        self.horizontalLayout_4.setObjectName(u"horizontalLayout_4")
+        self.set_enc_pass_btn = QPushButton(self.centralwidget)
+        self.set_enc_pass_btn.setObjectName(u"set_enc_pass_btn")
+
+        self.horizontalLayout_4.addWidget(self.set_enc_pass_btn)
+
+        self.clear_enc_pass_btn = QPushButton(self.centralwidget)
+        self.clear_enc_pass_btn.setObjectName(u"clear_enc_pass_btn")
+        self.clear_enc_pass_btn.setEnabled(False)
+
+        self.horizontalLayout_4.addWidget(self.clear_enc_pass_btn)
+
+        self.horizontalSpacer_2 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.horizontalLayout_4.addItem(self.horizontalSpacer_2)
+
+
+        self.verticalLayout_6.addLayout(self.horizontalLayout_4)
+
+        self.device_enc_enabled_lbl = QLabel(self.centralwidget)
+        self.device_enc_enabled_lbl.setObjectName(u"device_enc_enabled_lbl")
+
+        self.verticalLayout_6.addWidget(self.device_enc_enabled_lbl)
+
 
         self.horizontalLayout_3.addLayout(self.verticalLayout_6)
 
 
         self.verticalLayout_2.addLayout(self.horizontalLayout_3)
-
-        self.label_4 = QLabel(self.centralwidget)
-        self.label_4.setObjectName(u"label_4")
-        self.label_4.setFont(font3)
-
-        self.verticalLayout_2.addWidget(self.label_4)
-
-        self.backup_key_entry = QLineEdit(self.centralwidget)
-        self.backup_key_entry.setObjectName(u"backup_key_entry")
-        self.backup_key_entry.setEchoMode(QLineEdit.Password)
-
-        self.verticalLayout_2.addWidget(self.backup_key_entry)
 
         self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
@@ -187,7 +213,11 @@ class Ui_MainWindow(object):
         self.start_restore_btn.setText(QCoreApplication.translate("MainWindow", u"Restore", None))
         self.label_2.setText(QCoreApplication.translate("MainWindow", u"Backup Folder:", None))
         self.choose_backup_dir_btn.setText(QCoreApplication.translate("MainWindow", u"Choose Folder", None))
-        self.label_4.setText(QCoreApplication.translate("MainWindow", u"Encryption Key:", None))
+        self.enable_enc_chkbox.setText(QCoreApplication.translate("MainWindow", u"Encrypt backups", None))
+        self.label_5.setText(QCoreApplication.translate("MainWindow", u"Enabling encryption allows for backing up sensitive data not included in unencrypted backups", None))
+        self.set_enc_pass_btn.setText(QCoreApplication.translate("MainWindow", u"Set Password", None))
+        self.clear_enc_pass_btn.setText(QCoreApplication.translate("MainWindow", u"Clear Password", None))
+        self.device_enc_enabled_lbl.setText("")
         self.status_lbl.setText(QCoreApplication.translate("MainWindow", u"Ready.", None))
     # retranslateUi
 
