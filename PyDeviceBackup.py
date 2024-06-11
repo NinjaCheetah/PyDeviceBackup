@@ -3,11 +3,12 @@
 
 import sys
 import os
+import time
 import pathlib
 import platform
-from importlib.metadata import version
 
 from pymobiledevice3 import lockdown
+from pymobiledevice3 import usbmux
 from pymobiledevice3.services import mobilebackup2
 from pymobiledevice3.exceptions import *
 
@@ -53,10 +54,60 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.log_text = ""
+        self.lockdown_client = None
+        self.active_device_udid = ""
         self.threadpool = QThreadPool()
         self.ui.start_backup_btn.clicked.connect(self.start_backup_btn_pressed)
         self.ui.start_restore_btn.clicked.connect(self.start_restore_btn_pressed)
         self.ui.choose_backup_dir_btn.clicked.connect(self.choose_backup_dir_btn_pressed)
+        device_listener = Worker(self.watch_for_device)
+        device_listener.signals.result.connect(self.new_device_connected)
+        self.threadpool.start(device_listener)
+
+    def watch_for_device(self, progress_callback):
+        device_list = None
+        while device_list is None or len(device_list) == 0:
+            try:
+                device_list = usbmux.list_devices()
+            except ConnectionFailedToUsbmuxdError:
+                time.sleep(1)
+        print(device_list)
+        self.active_device_udid = device_list[0].serial
+        return 0
+
+    def new_device_connected(self):
+        self.lockdown_client = lockdown.create_using_usbmux(serial=self.active_device_udid)
+        print("Found new device: " + self.active_device_udid)
+        self.ui.device_name_lbl.setText(self.lockdown_client.all_values.get("DeviceName"))
+        self.ui.device_type_lbl.setText(self.lockdown_client.display_name)
+        self.ui.ios_version_lbl.setText("iOS Version: " + self.lockdown_client.product_version)
+        self.ui.device_udid_lbl.setText("UDID: " + self.lockdown_client.identifier)
+        print(self.lockdown_client.short_info)
+        # Issue device disconnect listener.
+        disconnect_listener = Worker(self.watch_for_disconnect)
+        disconnect_listener.signals.result.connect(self.device_disconnected)
+        self.threadpool.start(disconnect_listener)
+
+    def watch_for_disconnect(self, progress_callback):
+        device_connected = True
+        while device_connected:
+            try:
+                date = self.lockdown_client.date
+                time.sleep(1)
+            except ConnectionFailedToUsbmuxdError:
+                device_connected = False
+        return 0
+
+    def device_disconnected(self):
+        self.lockdown_client = None
+        self.ui.device_name_lbl.setText("No Device Connected")
+        self.ui.device_type_lbl.setText("Connect a device to begin")
+        self.ui.ios_version_lbl.setText("iOS Version: ")
+        self.ui.device_udid_lbl.setText("UDID: ")
+        # Reissue device connection listener.
+        device_listener = Worker(self.watch_for_device)
+        device_listener.signals.result.connect(self.new_device_connected)
+        self.threadpool.start(device_listener)
 
     def start_backup_btn_pressed(self):
         msg_box = QMessageBox()
@@ -72,60 +123,44 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                                        ".")
             msg_box.exec()
             return
-        # Try to establish a connection to a lockdown client, and display an error if this fails.
-        try:
-            lockdown_client = lockdown.create_using_usbmux()
-            print("Successfully connected to lockdown client: " + lockdown_client.display_name)
-        except ConnectionFailedToUsbmuxdError:
+        # Make sure that there's an active lockdown client connected.
+        if self.lockdown_client is None:
             msg_box.setIcon(QMessageBox.Icon.Critical)
-            msg_box.setWindowTitle("Lockdown Client Failed to Connect!")
-            msg_box.setText("An error occurred while trying to connect to a lockdown client.")
-            msg_box.setInformativeText("Please ensure that your device is connected, and that you have usbmuxd "
-                                       "installed on your system.")
+            msg_box.setWindowTitle("No Device Connected")
+            msg_box.setText("No device is connected to back up!")
+            msg_box.setInformativeText("Please ensure that your device is connected and is recognized by the app before"
+                                       " trying to begin the backup.")
             msg_box.exec()
-            print("Failed to connect to lockdown client.")
+            print("No device is connected!")
             return
         # We're good to do, so lock the UI.
         self.ui.start_backup_btn.setEnabled(False)
         self.ui.start_restore_btn.setEnabled(False)
         self.ui.status_lbl.setText("Preparing backup... please wait")
         # Create new thread worker to handle the backup operation.
-        worker = Worker(self.run_backup, lockdown_client=lockdown_client, backup_dir=backup_dir)
+        worker = Worker(self.run_backup, backup_dir=backup_dir)
         worker.signals.result.connect(self.result_handler)
         worker.signals.progress.connect(self.progress_handler)
         self.threadpool.start(worker)
 
     def start_restore_btn_pressed(self):
-        lockdown_client = lockdown.create_using_usbmux()
-        print(lockdown_client.identifier)
+        #lockdown_client = lockdown.create_using_usbmux()
+        #print(lockdown_client.identifier)
+        print(self.watch_for_device())
 
-    def run_backup(self, progress_callback, lockdown_client: lockdown.LockdownClient, backup_dir: pathlib.Path):
+    def run_backup(self, progress_callback, backup_dir: pathlib.Path):
         # Create a mobilebackup2service instance using the provided lockdown client, so we can start the backup.
-        backup_service = mobilebackup2.Mobilebackup2Service(lockdown_client)
+        backup_service = mobilebackup2.Mobilebackup2Service(self.lockdown_client)
         # Determine if we need to do a full backup or just a diff backup.
-        device_dir = backup_dir.joinpath(lockdown_client.identifier)
+        device_dir = backup_dir.joinpath(self.lockdown_client.identifier)
         if device_dir.is_dir() and pathlib.Path(device_dir.joinpath("Manifest.db")).exists():
             full_backup = False
-            print("Existing backup found for device with UUID \"" + lockdown_client.identifier + "\". Performing diff "
-                  "backup.")
+            print("Existing backup found for device with UUID \"" + self.lockdown_client.identifier + "\". Performing "
+                  "diff backup.")
         else:
             full_backup = True
-            print("No pre-existing backup found for device with UUID \"" + lockdown_client.identifier + "\". "
+            print("No pre-existing backup found for device with UUID \"" + self.lockdown_client.identifier + "\". "
                   " Performing full backup.")
-
-        # The code below is the "correct" solution, but for some reason pymobiledevice3 seems to break the
-        # connection to the device when you try it.
-        # try:
-        #    backup_service.info(backup_directory=backup_dir, source=lockdown_client.identifier)
-        # except AssertionError:
-        #    full_backup = True
-        #    print("No pre-existing backup found for device with UUID \"" + lockdown_client.identifier + "\". "
-        #          " Performing full backup.")
-        # else:
-        #    full_backup = False
-        #    print("Existing backup found for device with UUID \"" + lockdown_client.identifier + "\". Performing diff "
-        #          "backup.")
-        # Begin the backup.
         try:
             backup_service.backup(backup_directory=backup_dir, progress_callback=progress_callback.emit,
                                   full=full_backup)
@@ -133,6 +168,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print("Lost connection to device!")
             return -1
         else:
+            backup_service.close()
             return 0
 
     def result_handler(self, result):
@@ -142,6 +178,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg_box.setDefaultButton(QMessageBox.StandardButton.Ok)
         if result == 0:
+            self.ui.status_lbl.setText("Backup Complete!")
             msg_box.setIcon(QMessageBox.Icon.Information)
             msg_box.setWindowTitle("Backup Completed")
             msg_box.setText("Backup was successfully completed!")
@@ -152,21 +189,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             msg_box.setText("PyDeviceBackup has lost connection to your device.")
             msg_box.setInformativeText("Please reconnect your device, and ensure that it remains connected throughout"
                                        " the entire backup.")
-            msg_box.exec()
-        elif result == -2:
-            msg_box.setWindowTitle("Title ID/Version Not Found")
-            msg_box.setText("No title with the provided Title ID or version could be found!")
-            msg_box.setInformativeText("Please make sure that you have entered a valid Title ID, or selected one from "
-                                       " the title database, and that the provided version exists for the title you are"
-                                       " attempting to download.")
-            msg_box.exec()
-        elif result == -3:
-            msg_box.setWindowTitle("Content Decryption Failed")
-            msg_box.setText("Content decryption was not successful! Decrypted contents could not be created.")
-            msg_box.setInformativeText("Your TMD or Ticket may be damaged, or they may not correspond with the content "
-                                       "being decrypted. If you have checked \"Use local files, if they exist\", try "
-                                       "disabling that option before trying the download again to fix potential issues "
-                                       "with local data.")
             msg_box.exec()
         # Unlock UI again.
         self.ui.start_backup_btn.setEnabled(True)
